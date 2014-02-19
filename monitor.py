@@ -37,34 +37,70 @@ class Monitor(object):
         for handler in self.handlers:
             handler(content)
 
-    def read(self):
-        c = []
-        for i in xrange(self.lines):
-            l = self.file.readline()
-            if not l:
-                break
-            c.append(l)
-        if c:
-            self.handle(c)
+    def report_progress(self, listener):
+        pass
 
     def start(self):
         if not self.running:
             self.running = True
-            self.file_id = self.get_file_id(os.stat(self.file_path))
-            self.file = open(self.file_path, 'rb')
             self.__monitor()
 
     def __monitor(self):
         while self.running:
-            gevent.sleep(self.interval)
-            file_id = self.get_file_id(os.stat(self.file_path))
-            if file_id != self.file_id:
-                self.file = open(self.file_path, 'rb')
-                self.position = 0
-                self.timestamp = time.time()
-            self.read()
-            self.position = self.file.tell()
-            self.timestamp = time.time()
+            pass
+
+
+class Listener(object):
+    """
+    日志监听器
+    """
+    def __init__(self, monitor, file_path, progress, cfg):
+        self.monitor = monitor
+        self.file_path = file_path
+        self.progress = progress
+        self.cfg = cfg
+        self.running = False
+        self._file = None
+        self.file_id = None
+
+    def start(self):
+        if not self.running:
+            self.running = True
+            self.__listen()
+
+    def stop(self):
+        self.running = False
+        self._file.close()
+        self._file = None
+
+    def switch_file(self):
+        st = os.stat(self.file_path)
+        file_id = self.get_file_id(st)
+        if self._file is None:
+            self.file_id = file_id
+            self._file = open(self.file_path, 'rb')
+            self._file.seek(self.progress.get('position', 0))
+        elif self.file_id != file_id and st.st_size <= self.progress.get('position', 0):
+            self.file_id = file_id
+            self._file = open(self.file_path, 'rb')
+            self.progress['position'] = 0
+            self.progress['timestamp'] = time.time()
+
+    def __listen(self):
+        while self.running:
+            self.switch_file()
+            lines = []
+            for i in xrange(self.cfg['lines']):
+                l = self._file.readline()
+                if not l:
+                    break
+                lines.append(l)
+            self.progress['position'] = self._file.tell()
+            self.progress['timestamp'] = time.time()
+            if lines:
+                self.monitor.handle(lines)
+            self.monitor.report_progress(self)
+            gevent.sleep(self.cfg['interval'])
 
     @staticmethod
     def get_file_id(st):
