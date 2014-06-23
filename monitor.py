@@ -3,27 +3,33 @@ __author__ = 'lilx at 14-2-13'
 import time
 import os
 import gevent
-import json
 from datetime import datetime
+from datetime import timedelta
+from gevent import Greenlet
 
 
-class Monitor(object):
+class Monitor(Greenlet):
     """
     log file monitor
     """
-    def __init__(self, cfg):
+    def __init__(self, scheduler, config, progress):
         """
-        with_history : bool if check the history file
+        cfg :
+            file_path : str the monitor file path
+            interval : int the rate to check the file
+            lines : int line count read at a time
+            position : int the read position of last time
+            timestamp : float the last read timestamp
+            with_history : bool if check the history file
+            id : str the monitor log config id
         """
-        self.cfg = cfg
-        self.with_history = self.cfg.get('with_history')
-        self.file_path = self.cfg['file_path']
-        self.progress_path = ''
-        self.progress = {}
+        Greenlet.__init__(self)
+        self.scheduler = scheduler
+        self.cfg = config
+        self.progress = progress
         self.handlers = []
-        self.listeners = {}
         self.running = False
-        self.changes = 0
+        self.listeners = {}
 
     def register_handler(self, handler):
         if handler not in self.handlers:
@@ -31,68 +37,70 @@ class Monitor(object):
 
     def handle(self, content):
         for handler in self.handlers:
-            handler(content)
+            handler.handle(content)
 
     def report_progress(self, listener):
-        pre_position = self.progress[listener.file_path].get('position', 0)
-        cur_position = listener.progress.get('position', 0)
-        cur_timestamp = listener.progress.get('timestamp', 0)
-        self.progress[listener.file_path]['timestamp'] = cur_timestamp
-        self.progress[listener.file_path]['position'] = cur_position
-        if pre_position != cur_position:
-            self.changes += 1
-            if self.changes >= self.cfg['change_to_save']:
-                self.save_progress()
-                self.changes = 0
-        elif listener.file_path != self.file_path:
-            listener.stop()
+        file_pg = self.progress.get(listener.cfg['dk'], {})
+        if file_pg.get('position') == listener.progress.get('position'):
+            if '0' != listener.cfg['dk']:
+                listener.stop()
+                self.listeners.pop(listener.cfg['dk'])
+            return None
+        file_pg.update(listener.progress)
+        self.progress[listener.cfg['dk']] = file_pg
+        self.scheduler.save_progress(self)
 
-    def start(self):
-        self.load_progress()
-        self.bind_listener()
-        self.running = True
-        for listener in self.listeners.values():
-            listener.start()
+    def _run(self):
+        if not self.running:
+            self.running = True
+            self.__monitor()
 
     def stop(self):
-        for listener in self.listeners.values():
+        self.running = False
+        for li, listener in self.listeners.iteritems():
             listener.stop()
-        self.save_progress()
+        gevent.joinall(self.listeners.values())
 
-    def load_progress(self):
-        p = os.path.join('data', 'progress_monitor_' + self.cfg['name'])
-        self.progress_path = p
-        if os.path.isfile(p):
-            f = open(p, 'rb')
-            self.progress = json.load(f)
-        if self.file_path not in self.progress:
-            self.progress[self.file_path] = {
-                'position': 0
-            }
+    def __monitor(self):
+        nt = datetime.now()
+        ndk = nt.strftime('%Y-%m-%d')
+        p0 = self.progress.get('0', {})
+        if p0.get('timestamp', 0) > 0:
+            # 计算指定日期
+            dt = datetime.fromtimestamp(p0['timestamp'])
+            da = timedelta(1)
+            dk = dt.strftime('%Y-%m-%d')
+            while ndk > dk:
+                if dk not in self.progress:
+                    self.progress[dk] = {
+                        'timestamp': time.mktime(dt.timetuple()),
+                        'position': 0
+                    }
+                dt += da
+                dk = dt.strftime('%Y-%m-%d')
+        for dk, pg in self.progress.items():
+            if dk != '0':
+                fp = self.cfg['file_path'] + '.' + dk
+            else:
+                fp = self.cfg['file_path']
+            if not os.path.exists(fp):
+                self.progress.pop(dk, None)
+                continue
+            cfg = {'dk': dk}
+            cfg.update(self.cfg)
+            progress = {}
+            progress.update(pg)
+            listener = Listener(self, fp, progress, cfg)
+            listener.start()
+            self.listeners[dk] = listener
 
-    def save_progress(self):
-        p = os.path.join('data', 'progress_monitor_' + self.cfg['name'])
-        json.dump(self.progress, open(p, 'wb'))
 
-    def bind_listener(self):
-        main_progress = self.progress[self.file_path]
-        timestamp = main_progress.get('timestamp')
-        if timestamp and self.with_history:
-            pt = datetime.fromtimestamp(timestamp)
-            history_log_path = self.file_path + '.' + pt.strftime(self.cfg['suffix_date_format'])
-            if history_log_path not in self.progress:
-                self.progress[history_log_path] = {
-                    'position': 0
-                }
-        for file_path, progress in self.progress.iteritems():
-            self.listeners[file_path] = Listener(self, file_path, progress, {})
-
-
-class Listener(object):
+class Listener(Greenlet):
     """
-    日志监听器
+    log listener
     """
     def __init__(self, monitor, file_path, progress, cfg):
+        Greenlet.__init__(self)
         self.monitor = monitor
         self.file_path = file_path
         self.progress = progress
@@ -101,10 +109,10 @@ class Listener(object):
         self._file = None
         self.file_id = None
 
-    def start(self):
+    def _run(self):
         if not self.running:
             self.running = True
-            gevent.spawn(self.__listen)
+            self.__listen()
 
     def stop(self):
         self.running = False

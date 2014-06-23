@@ -1,6 +1,8 @@
 {
-	"game.log": {
-        "timestamp": 0,
-        "position": 0
+    "game.log": {
+        "0": {
+            "position": 0,
+            "timestamp": 1403408004.638
+        }
     }
 }

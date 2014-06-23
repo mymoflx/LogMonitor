@@ -1,0 +1,16 @@
+{
+    "change_to_save": 50,
+	"default_monitor": {
+        "base_path": ".",
+        "interval": 10,
+        "lines": 100,
+        "suffix_date_format": "%Y-%m-%d"
+    },
+    "monitor_logs": [
+        {
+            "id": "game.log",
+            "file_name": "game.log",
+            "handler": "handlers.Handler"
+        }
+    ]
+}
