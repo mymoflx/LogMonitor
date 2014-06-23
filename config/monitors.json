@@ -1,9 +1,0 @@
-{
-    "game": {
-        "file_path": "game.log",
-        "with_history": false,
-        "suffix_date_format": "%Y-%m-%d",
-        "change_to_save": 50,
-        "listener": "default"
-    }
-}
